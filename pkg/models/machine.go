@@ -232,3 +232,59 @@ type ImageTest struct {
 	CreatedAt   time.Time `json:"created_at" db:"created_at"`
 	CompletedAt *time.Time `json:"completed_at,omitempty" db:"completed_at"`
 }
+
+// Webhook represents a webhook endpoint for event notifications
+type Webhook struct {
+	ID          string          `json:"id" db:"id"`
+	Name        string          `json:"name" db:"name"`
+	URL         string          `json:"url" db:"url"`
+	Events      []string        `json:"events" db:"events"` // machine.enrolled, machine.status_changed, etc.
+	Secret      string          `json:"secret,omitempty" db:"secret"` // For HMAC signature
+	Active      bool            `json:"active" db:"active"`
+	Headers     json.RawMessage `json:"headers,omitempty" db:"headers"` // Custom headers as JSON
+	Timeout     int             `json:"timeout" db:"timeout"` // Request timeout in seconds
+	MaxRetries  int             `json:"max_retries" db:"max_retries"`
+	LastSuccess *time.Time      `json:"last_success,omitempty" db:"last_success"`
+	LastFailure *time.Time      `json:"last_failure,omitempty" db:"last_failure"`
+	CreatedAt   time.Time       `json:"created_at" db:"created_at"`
+	UpdatedAt   time.Time       `json:"updated_at" db:"updated_at"`
+}
+
+// WebhookDelivery represents a webhook delivery attempt
+type WebhookDelivery struct {
+	ID          string    `json:"id" db:"id"`
+	WebhookID   string    `json:"webhook_id" db:"webhook_id"`
+	Event       string    `json:"event" db:"event"`
+	Payload     string    `json:"payload" db:"payload"`
+	StatusCode  int       `json:"status_code" db:"status_code"`
+	Response    string    `json:"response,omitempty" db:"response"`
+	Error       string    `json:"error,omitempty" db:"error"`
+	Attempts    int       `json:"attempts" db:"attempts"`
+	Success     bool      `json:"success" db:"success"`
+	CreatedAt   time.Time `json:"created_at" db:"created_at"`
+	CompletedAt *time.Time `json:"completed_at,omitempty" db:"completed_at"`
+}
+
+// MachineTemplate represents a configuration template for machines
+type MachineTemplate struct {
+	ID          string          `json:"id" db:"id"`
+	Name        string          `json:"name" db:"name"`
+	Description string          `json:"description" db:"description"`
+	NixOSConfig string          `json:"nixos_config" db:"nixos_config"`
+	BMCConfig   *BMCInfo        `json:"bmc_config,omitempty" db:"bmc_config"`
+	Tags        json.RawMessage `json:"tags,omitempty" db:"tags"` // Array of tags as JSON
+	Variables   json.RawMessage `json:"variables,omitempty" db:"variables"` // Template variables as JSON
+	CreatedAt   time.Time       `json:"created_at" db:"created_at"`
+	UpdatedAt   time.Time       `json:"updated_at" db:"updated_at"`
+	CreatedBy   string          `json:"created_by" db:"created_by"` // User ID
+}
+
+// MachineEvent represents an event that occurred for a machine
+type MachineEvent struct {
+	ID          string          `json:"id" db:"id"`
+	MachineID   string          `json:"machine_id" db:"machine_id"`
+	Event       string          `json:"event" db:"event"` // enrolled, status_changed, build_started, etc.
+	Data        json.RawMessage `json:"data" db:"data"` // Event-specific data
+	CreatedAt   time.Time       `json:"created_at" db:"created_at"`
+	CreatedBy   *string         `json:"created_by,omitempty" db:"created_by"` // User ID if applicable
+}

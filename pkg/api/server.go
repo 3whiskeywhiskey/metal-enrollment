@@ -4,20 +4,23 @@ import (
 	"encoding/json"
 	"log"
 	"net/http"
+	"strconv"
 	"time"
 
 	"github.com/3whiskeywhiskey/metal-enrollment/pkg/auth"
 	"github.com/3whiskeywhiskey/metal-enrollment/pkg/database"
 	"github.com/3whiskeywhiskey/metal-enrollment/pkg/models"
+	"github.com/3whiskeywhiskey/metal-enrollment/pkg/webhook"
 	"github.com/gorilla/mux"
 )
 
 // Server represents the API server
 type Server struct {
-	db         *database.DB
-	Router     *mux.Router
-	config     Config
-	jwtManager *auth.JWTManager
+	db             *database.DB
+	Router         *mux.Router
+	config         Config
+	jwtManager     *auth.JWTManager
+	webhookService *webhook.Service
 }
 
 // Config holds server configuration
@@ -32,10 +35,11 @@ type Config struct {
 // New creates a new API server
 func New(db *database.DB, config Config) *Server {
 	s := &Server{
-		db:         db,
-		Router:     mux.NewRouter(),
-		config:     config,
-		jwtManager: auth.NewJWTManager(config.JWTSecret, config.JWTExpiry),
+		db:             db,
+		Router:         mux.NewRouter(),
+		config:         config,
+		jwtManager:     auth.NewJWTManager(config.JWTSecret, config.JWTExpiry),
+		webhookService: webhook.NewService(db),
 	}
 
 	s.setupRoutes()
@@ -155,6 +159,33 @@ func (s *Server) setupRoutes() {
 		bulkAPI.Use(authMiddleware)
 		bulkAPI.Use(auth.RequireRole(models.RoleOperator, models.RoleAdmin))
 		bulkAPI.HandleFunc("", s.handleBulkOperation).Methods("POST")
+
+		// Webhook routes (operators and admins only)
+		webhooksAPI := api.PathPrefix("/webhooks").Subrouter()
+		webhooksAPI.Use(authMiddleware)
+		webhooksAPI.Use(auth.RequireRole(models.RoleOperator, models.RoleAdmin))
+		webhooksAPI.HandleFunc("", s.handleListWebhooks).Methods("GET")
+		webhooksAPI.HandleFunc("", s.handleCreateWebhook).Methods("POST")
+		webhooksAPI.HandleFunc("/{id}", s.handleGetWebhook).Methods("GET")
+		webhooksAPI.HandleFunc("/{id}", s.handleUpdateWebhook).Methods("PUT")
+		webhooksAPI.HandleFunc("/{id}", s.handleDeleteWebhook).Methods("DELETE")
+		webhooksAPI.HandleFunc("/{id}/deliveries", s.handleListWebhookDeliveries).Methods("GET")
+
+		// Template routes (operators and admins only)
+		templatesAPI := api.PathPrefix("/templates").Subrouter()
+		templatesAPI.Use(authMiddleware)
+		templatesAPI.Use(auth.RequireRole(models.RoleOperator, models.RoleAdmin))
+		templatesAPI.HandleFunc("", s.handleListTemplates).Methods("GET")
+		templatesAPI.HandleFunc("", s.handleCreateTemplate).Methods("POST")
+		templatesAPI.HandleFunc("/{id}", s.handleGetTemplate).Methods("GET")
+		templatesAPI.HandleFunc("/{id}", s.handleUpdateTemplate).Methods("PUT")
+		templatesAPI.HandleFunc("/{id}", s.handleDeleteTemplate).Methods("DELETE")
+
+		// Apply template to machine (operators and admins only)
+		operatorRoutes.HandleFunc("/{id}/template/{template_id}", s.handleApplyTemplate).Methods("POST")
+
+		// Machine events (viewers can read)
+		machinesAPI.HandleFunc("/{id}/events", s.handleGetMachineEvents).Methods("GET")
 	} else {
 		// No auth - all routes are public
 		api.HandleFunc("/machines", s.handleListMachines).Methods("GET")
@@ -199,6 +230,25 @@ func (s *Server) setupRoutes() {
 
 		// Bulk operations
 		api.HandleFunc("/bulk", s.handleBulkOperation).Methods("POST")
+
+		// Webhooks (no auth)
+		api.HandleFunc("/webhooks", s.handleListWebhooks).Methods("GET")
+		api.HandleFunc("/webhooks", s.handleCreateWebhook).Methods("POST")
+		api.HandleFunc("/webhooks/{id}", s.handleGetWebhook).Methods("GET")
+		api.HandleFunc("/webhooks/{id}", s.handleUpdateWebhook).Methods("PUT")
+		api.HandleFunc("/webhooks/{id}", s.handleDeleteWebhook).Methods("DELETE")
+		api.HandleFunc("/webhooks/{id}/deliveries", s.handleListWebhookDeliveries).Methods("GET")
+
+		// Templates (no auth)
+		api.HandleFunc("/templates", s.handleListTemplates).Methods("GET")
+		api.HandleFunc("/templates", s.handleCreateTemplate).Methods("POST")
+		api.HandleFunc("/templates/{id}", s.handleGetTemplate).Methods("GET")
+		api.HandleFunc("/templates/{id}", s.handleUpdateTemplate).Methods("PUT")
+		api.HandleFunc("/templates/{id}", s.handleDeleteTemplate).Methods("DELETE")
+		api.HandleFunc("/machines/{id}/template/{template_id}", s.handleApplyTemplate).Methods("POST")
+
+		// Machine events (no auth)
+		api.HandleFunc("/machines/{id}/events", s.handleGetMachineEvents).Methods("GET")
 	}
 
 	// Global middleware
@@ -253,12 +303,77 @@ func (s *Server) handleEnroll(w http.ResponseWriter, r *http.Request) {
 	}
 
 	log.Printf("Enrolled new machine: %s (service_tag: %s)", machine.ID, machine.ServiceTag)
+
+	// Trigger webhook event
+	if s.webhookService != nil {
+		go s.webhookService.TriggerEvent("machine.enrolled", map[string]interface{}{
+			"machine_id":  machine.ID,
+			"service_tag": machine.ServiceTag,
+			"mac_address": machine.MACAddress,
+			"status":      machine.Status,
+			"manufacturer": machine.Hardware.Manufacturer,
+			"model":       machine.Hardware.Model,
+		})
+	}
+
+	// Create event record
+	s.db.EmitMachineEvent(machine.ID, "machine.enrolled", map[string]interface{}{
+		"service_tag": machine.ServiceTag,
+		"mac_address": machine.MACAddress,
+	}, nil)
+
 	respondJSON(w, http.StatusCreated, machine)
 }
 
-// handleListMachines lists all machines
+// handleListMachines lists all machines with optional filtering
 func (s *Server) handleListMachines(w http.ResponseWriter, r *http.Request) {
-	machines, err := s.db.ListMachines()
+	// Parse query parameters for filtering
+	query := r.URL.Query()
+
+	// Check if any filters are provided
+	hasFilters := query.Get("status") != "" ||
+		query.Get("hostname") != "" ||
+		query.Get("service_tag") != "" ||
+		query.Get("mac_address") != "" ||
+		query.Get("manufacturer") != "" ||
+		query.Get("model") != "" ||
+		query.Get("search") != "" ||
+		query.Get("limit") != "" ||
+		query.Get("offset") != ""
+
+	var machines []*models.Machine
+	var err error
+
+	if hasFilters {
+		// Use advanced filtering
+		filter := database.MachineFilter{
+			Status:       query.Get("status"),
+			Hostname:     query.Get("hostname"),
+			ServiceTag:   query.Get("service_tag"),
+			MACAddress:   query.Get("mac_address"),
+			Manufacturer: query.Get("manufacturer"),
+			Model:        query.Get("model"),
+			Search:       query.Get("search"),
+		}
+
+		// Parse pagination parameters
+		if limitStr := query.Get("limit"); limitStr != "" {
+			if limit, err := strconv.Atoi(limitStr); err == nil && limit > 0 {
+				filter.Limit = limit
+			}
+		}
+		if offsetStr := query.Get("offset"); offsetStr != "" {
+			if offset, err := strconv.Atoi(offsetStr); err == nil && offset >= 0 {
+				filter.Offset = offset
+			}
+		}
+
+		machines, err = s.db.SearchMachines(filter)
+	} else {
+		// List all machines
+		machines, err = s.db.ListMachines()
+	}
+
 	if err != nil {
 		respondError(w, http.StatusInternalServerError, "failed to list machines")
 		return
@@ -302,6 +417,8 @@ func (s *Server) handleUpdateMachine(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	oldStatus := machine.Status
+
 	var updates models.Machine
 	if err := json.NewDecoder(r.Body).Decode(&updates); err != nil {
 		respondError(w, http.StatusBadRequest, "invalid request body")
@@ -323,6 +440,22 @@ func (s *Server) handleUpdateMachine(w http.ResponseWriter, r *http.Request) {
 	if err := s.db.UpdateMachine(machine); err != nil {
 		respondError(w, http.StatusInternalServerError, "failed to update machine")
 		return
+	}
+
+	// Trigger webhook if status changed
+	if oldStatus != machine.Status {
+		if s.webhookService != nil {
+			go s.webhookService.TriggerEvent("machine.status_changed", map[string]interface{}{
+				"machine_id": machine.ID,
+				"old_status": oldStatus,
+				"new_status": machine.Status,
+			})
+		}
+
+		s.db.EmitMachineEvent(machine.ID, "machine.status_changed", map[string]interface{}{
+			"old_status": oldStatus,
+			"new_status": machine.Status,
+		}, nil)
 	}
 
 	respondJSON(w, http.StatusOK, machine)
@@ -370,11 +503,33 @@ func (s *Server) handleBuildMachine(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Update machine status
+	oldStatus := machine.Status
 	machine.Status = models.StatusBuilding
 	machine.LastBuildID = &build.ID
 	if err := s.db.UpdateMachine(machine); err != nil {
 		log.Printf("Failed to update machine status: %v", err)
 	}
+
+	// Trigger webhook event
+	if s.webhookService != nil {
+		go s.webhookService.TriggerEvent("machine.build_started", map[string]interface{}{
+			"machine_id": machine.ID,
+			"build_id":   build.ID,
+		})
+
+		if oldStatus != machine.Status {
+			go s.webhookService.TriggerEvent("machine.status_changed", map[string]interface{}{
+				"machine_id": machine.ID,
+				"old_status": oldStatus,
+				"new_status": machine.Status,
+			})
+		}
+	}
+
+	// Create event record
+	s.db.EmitMachineEvent(machine.ID, "machine.build_started", map[string]interface{}{
+		"build_id": build.ID,
+	}, nil)
 
 	// TODO: Send build request to builder service
 	log.Printf("Build requested for machine %s: build_id=%s", machine.ID, build.ID)
@@ -413,6 +568,28 @@ func (s *Server) handleGetBuild(w http.ResponseWriter, r *http.Request) {
 	}
 
 	respondJSON(w, http.StatusOK, build)
+}
+
+// handleGetMachineEvents retrieves events for a machine
+func (s *Server) handleGetMachineEvents(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	machineID := vars["id"]
+
+	limitStr := r.URL.Query().Get("limit")
+	limit := 50
+	if limitStr != "" {
+		if l, err := strconv.Atoi(limitStr); err == nil && l > 0 {
+			limit = l
+		}
+	}
+
+	events, err := s.db.ListMachineEvents(machineID, limit)
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, "failed to list events")
+		return
+	}
+
+	respondJSON(w, http.StatusOK, events)
 }
 
 // handleHealth returns server health status
