@@ -1,0 +1,107 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: enrollment-builder
+  namespace: metal-enrollment
+  labels:
+    app: enrollment-builder
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: enrollment-builder
+  template:
+    metadata:
+      labels:
+        app: enrollment-builder
+    spec:
+      # This needs to run on a NixOS node
+      nodeSelector:
+        kubernetes.io/os: linux
+        # Add a label to identify NixOS nodes, e.g.:
+        # nixos: "true"
+      containers:
+      - name: builder
+        image: metal-enrollment/builder:latest
+        imagePullPolicy: IfNotPresent
+        ports:
+        - containerPort: 8081
+          name: http
+        env:
+        - name: DB_DRIVER
+          valueFrom:
+            configMapKeyRef:
+              name: metal-enrollment-config
+              key: DB_DRIVER
+        - name: DB_DSN
+          value: "/data/metal-enrollment.db"
+        - name: LISTEN_ADDR
+          value: ":8081"
+        - name: BUILD_DIR
+          value: "/tmp/metal-builds"
+        - name: OUTPUT_DIR
+          value: "/images"
+        - name: NIXOS_DIR
+          value: "/etc/metal-enrollment/nixos"
+        volumeMounts:
+        - name: data
+          mountPath: /data
+        - name: images
+          mountPath: /images
+        - name: nixos-config
+          mountPath: /etc/metal-enrollment/nixos
+        - name: nix-store
+          mountPath: /nix
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8081
+          initialDelaySeconds: 10
+          periodSeconds: 30
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 8081
+          initialDelaySeconds: 5
+          periodSeconds: 10
+        resources:
+          requests:
+            memory: "2Gi"
+            cpu: "1000m"
+          limits:
+            memory: "8Gi"
+            cpu: "4000m"
+        securityContext:
+          privileged: true  # Needed for Nix builds
+      volumes:
+      - name: data
+        persistentVolumeClaim:
+          claimName: metal-enrollment-data
+      - name: images
+        persistentVolumeClaim:
+          claimName: metal-enrollment-images
+      - name: nixos-config
+        configMap:
+          name: nixos-configurations
+      - name: nix-store
+        hostPath:
+          path: /nix
+          type: Directory
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: enrollment-builder
+  namespace: metal-enrollment
+  labels:
+    app: enrollment-builder
+spec:
+  type: ClusterIP
+  ports:
+  - port: 8081
+    targetPort: 8081
+    protocol: TCP
+    name: http
+  selector:
+    app: enrollment-builder

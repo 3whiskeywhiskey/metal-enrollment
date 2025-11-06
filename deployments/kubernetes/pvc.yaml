@@ -1,0 +1,26 @@
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: metal-enrollment-data
+  namespace: metal-enrollment
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 10Gi
+  storageClassName: local-path  # Adjust based on your storage class
+
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: metal-enrollment-images
+  namespace: metal-enrollment
+spec:
+  accessModes:
+    - ReadWriteMany  # Needed for shared access between builder and ipxe-server
+  resources:
+    requests:
+      storage: 100Gi
+  storageClassName: nfs  # Adjust based on your storage class
