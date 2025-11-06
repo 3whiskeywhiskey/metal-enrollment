@@ -37,10 +37,42 @@ type Machine struct {
 	LastBuildID   *string    `json:"last_build_id,omitempty" db:"last_build_id"`
 	LastBuildTime *time.Time `json:"last_build_time,omitempty" db:"last_build_time"`
 
+	// IPMI/BMC configuration
+	BMCInfo *BMCInfo `json:"bmc_info,omitempty" db:"bmc_info"`
+
 	// Timestamps
 	EnrolledAt time.Time  `json:"enrolled_at" db:"enrolled_at"`
 	UpdatedAt  time.Time  `json:"updated_at" db:"updated_at"`
 	LastSeenAt *time.Time `json:"last_seen_at,omitempty" db:"last_seen_at"`
+}
+
+// BMCInfo contains BMC/IPMI configuration and credentials
+type BMCInfo struct {
+	IPAddress string `json:"ip_address"`
+	Username  string `json:"username"`
+	Password  string `json:"password,omitempty"` // Encrypted in storage
+	Type      string `json:"type"`               // IPMI, Redfish, etc.
+	Port      int    `json:"port,omitempty"`
+	Enabled   bool   `json:"enabled"`
+}
+
+// Scan implements the sql.Scanner interface for BMCInfo
+func (b *BMCInfo) Scan(value interface{}) error {
+	if value == nil {
+		return nil
+	}
+
+	bytes, ok := value.([]byte)
+	if !ok {
+		return nil
+	}
+
+	return json.Unmarshal(bytes, b)
+}
+
+// Value implements the driver.Valuer interface for BMCInfo
+func (b BMCInfo) Value() (interface{}, error) {
+	return json.Marshal(b)
 }
 
 // HardwareInfo contains detailed hardware information about a machine
@@ -150,6 +182,53 @@ type BuildRequest struct {
 	LogOutput   string    `json:"log_output" db:"log_output"`
 	Error       string    `json:"error,omitempty" db:"error"`
 	ArtifactURL string    `json:"artifact_url,omitempty" db:"artifact_url"`
+	CreatedAt   time.Time `json:"created_at" db:"created_at"`
+	CompletedAt *time.Time `json:"completed_at,omitempty" db:"completed_at"`
+}
+
+// PowerOperation represents a power control operation
+type PowerOperation struct {
+	ID         string    `json:"id" db:"id"`
+	MachineID  string    `json:"machine_id" db:"machine_id"`
+	Operation  string    `json:"operation" db:"operation"` // on, off, reset, status
+	Status     string    `json:"status" db:"status"`       // pending, success, failed
+	Result     string    `json:"result,omitempty" db:"result"`
+	Error      string    `json:"error,omitempty" db:"error"`
+	InitiatedBy string   `json:"initiated_by" db:"initiated_by"` // User ID
+	CreatedAt  time.Time `json:"created_at" db:"created_at"`
+	CompletedAt *time.Time `json:"completed_at,omitempty" db:"completed_at"`
+}
+
+// MachineMetrics represents collected metrics from a machine
+type MachineMetrics struct {
+	ID              string    `json:"id" db:"id"`
+	MachineID       string    `json:"machine_id" db:"machine_id"`
+	Timestamp       time.Time `json:"timestamp" db:"timestamp"`
+	CPUUsagePercent float64   `json:"cpu_usage_percent" db:"cpu_usage_percent"`
+	MemoryUsedBytes int64     `json:"memory_used_bytes" db:"memory_used_bytes"`
+	MemoryTotalBytes int64    `json:"memory_total_bytes" db:"memory_total_bytes"`
+	DiskUsedBytes   int64     `json:"disk_used_bytes" db:"disk_used_bytes"`
+	DiskTotalBytes  int64     `json:"disk_total_bytes" db:"disk_total_bytes"`
+	NetworkRxBytes  int64     `json:"network_rx_bytes" db:"network_rx_bytes"`
+	NetworkTxBytes  int64     `json:"network_tx_bytes" db:"network_tx_bytes"`
+	LoadAverage1    float64   `json:"load_average_1" db:"load_average_1"`
+	LoadAverage5    float64   `json:"load_average_5" db:"load_average_5"`
+	LoadAverage15   float64   `json:"load_average_15" db:"load_average_15"`
+	Temperature     *float64  `json:"temperature,omitempty" db:"temperature"`
+	PowerState      string    `json:"power_state" db:"power_state"` // on, off, unknown
+	Uptime          int64     `json:"uptime" db:"uptime"` // seconds
+}
+
+// ImageTest represents a test result for a boot image
+type ImageTest struct {
+	ID          string    `json:"id" db:"id"`
+	ImagePath   string    `json:"image_path" db:"image_path"`
+	ImageType   string    `json:"image_type" db:"image_type"` // registration, custom
+	TestType    string    `json:"test_type" db:"test_type"`   // boot, integrity, validation
+	Status      string    `json:"status" db:"status"`         // pending, running, passed, failed
+	Result      string    `json:"result,omitempty" db:"result"`
+	Error       string    `json:"error,omitempty" db:"error"`
+	MachineID   *string   `json:"machine_id,omitempty" db:"machine_id"` // Optional: machine used for testing
 	CreatedAt   time.Time `json:"created_at" db:"created_at"`
 	CompletedAt *time.Time `json:"completed_at,omitempty" db:"completed_at"`
 }

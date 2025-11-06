@@ -52,6 +52,9 @@ func (s *Server) setupRoutes() {
 	api.HandleFunc("/enroll", s.handleEnroll).Methods("POST")
 	api.HandleFunc("/health", s.handleHealth).Methods("GET")
 
+	// Prometheus metrics endpoint (public)
+	api.HandleFunc("/metrics", s.handlePrometheusMetrics).Methods("GET")
+
 	if s.config.EnableAuth {
 		// Auth middleware for protected routes
 		authMiddleware := auth.AuthMiddleware(s.jwtManager)
@@ -87,6 +90,33 @@ func (s *Server) setupRoutes() {
 		operatorRoutes.Use(auth.RequireRole(models.RoleOperator, models.RoleAdmin))
 		operatorRoutes.HandleFunc("/{id}", s.handleUpdateMachine).Methods("PUT")
 		operatorRoutes.HandleFunc("/{id}/build", s.handleBuildMachine).Methods("POST")
+
+		// Power control routes (operators and admins only)
+		operatorRoutes.HandleFunc("/{id}/power", s.handlePowerControl).Methods("POST")
+		operatorRoutes.HandleFunc("/{id}/power/status", s.handleGetPowerStatus).Methods("GET")
+		operatorRoutes.HandleFunc("/{id}/power/operations", s.handleGetPowerOperations).Methods("GET")
+		operatorRoutes.HandleFunc("/{id}/bmc/test", s.handleTestBMC).Methods("POST")
+		operatorRoutes.HandleFunc("/{id}/bmc/info", s.handleGetBMCInfo).Methods("GET")
+		operatorRoutes.HandleFunc("/{id}/bmc/sensors", s.handleGetSensors).Methods("GET")
+
+		// Metrics routes - machines can submit (authenticated but no role check)
+		machinesAPI.HandleFunc("/{id}/metrics", s.handleSubmitMetrics).Methods("POST")
+		machinesAPI.HandleFunc("/{id}/metrics/latest", s.handleGetLatestMetrics).Methods("GET")
+		machinesAPI.HandleFunc("/{id}/metrics/history", s.handleGetMetricsHistory).Methods("GET")
+
+		// All machines metrics (authenticated)
+		metricsAPI := api.PathPrefix("/metrics").Subrouter()
+		metricsAPI.Use(authMiddleware)
+		metricsAPI.HandleFunc("/machines", s.handleGetAllMachinesMetrics).Methods("GET")
+
+		// Image testing routes (operators and admins only)
+		imageTestsAPI := api.PathPrefix("/image-tests").Subrouter()
+		imageTestsAPI.Use(authMiddleware)
+		imageTestsAPI.Use(auth.RequireRole(models.RoleOperator, models.RoleAdmin))
+		imageTestsAPI.HandleFunc("", s.handleListImageTests).Methods("GET")
+		imageTestsAPI.HandleFunc("", s.handleCreateImageTest).Methods("POST")
+		imageTestsAPI.HandleFunc("/{id}", s.handleGetImageTest).Methods("GET")
+		imageTestsAPI.HandleFunc("/{id}", s.handleUpdateImageTest).Methods("PUT")
 
 		// Only admins can delete
 		adminRoutes := machinesAPI.PathPrefix("").Subrouter()
@@ -134,6 +164,27 @@ func (s *Server) setupRoutes() {
 		api.HandleFunc("/machines/{id}/build", s.handleBuildMachine).Methods("POST")
 		api.HandleFunc("/machines/{id}/builds", s.handleListBuilds).Methods("GET")
 		api.HandleFunc("/machines/{id}/groups", s.handleGetMachineGroups).Methods("GET")
+
+		// Power control routes (no auth)
+		api.HandleFunc("/machines/{id}/power", s.handlePowerControl).Methods("POST")
+		api.HandleFunc("/machines/{id}/power/status", s.handleGetPowerStatus).Methods("GET")
+		api.HandleFunc("/machines/{id}/power/operations", s.handleGetPowerOperations).Methods("GET")
+		api.HandleFunc("/machines/{id}/bmc/test", s.handleTestBMC).Methods("POST")
+		api.HandleFunc("/machines/{id}/bmc/info", s.handleGetBMCInfo).Methods("GET")
+		api.HandleFunc("/machines/{id}/bmc/sensors", s.handleGetSensors).Methods("GET")
+
+		// Metrics routes (no auth)
+		api.HandleFunc("/machines/{id}/metrics", s.handleSubmitMetrics).Methods("POST")
+		api.HandleFunc("/machines/{id}/metrics/latest", s.handleGetLatestMetrics).Methods("GET")
+		api.HandleFunc("/machines/{id}/metrics/history", s.handleGetMetricsHistory).Methods("GET")
+		api.HandleFunc("/metrics/machines", s.handleGetAllMachinesMetrics).Methods("GET")
+
+		// Image testing routes (no auth)
+		api.HandleFunc("/image-tests", s.handleListImageTests).Methods("GET")
+		api.HandleFunc("/image-tests", s.handleCreateImageTest).Methods("POST")
+		api.HandleFunc("/image-tests/{id}", s.handleGetImageTest).Methods("GET")
+		api.HandleFunc("/image-tests/{id}", s.handleUpdateImageTest).Methods("PUT")
+
 		api.HandleFunc("/builds/{id}", s.handleGetBuild).Methods("GET")
 
 		// Groups

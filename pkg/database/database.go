@@ -55,12 +55,20 @@ func (db *DB) Migrate() error {
 		db.createAPIKeysTable(),
 		db.createGroupsTable(),
 		db.createGroupMembershipsTable(),
+		db.createPowerOperationsTable(),
+		db.createMachineMetricsTable(),
+		db.createImageTestsTable(),
 	}
 
 	for i, migration := range migrations {
 		if _, err := db.Exec(migration); err != nil {
 			return fmt.Errorf("migration %d failed: %w", i, err)
 		}
+	}
+
+	// Run additional migrations for schema updates
+	if err := db.addBMCInfoColumn(); err != nil {
+		return fmt.Errorf("failed to add bmc_info column: %w", err)
 	}
 
 	return nil
@@ -170,4 +178,93 @@ func (db *DB) createGroupMembershipsTable() string {
 			FOREIGN KEY (machine_id) REFERENCES machines(id) ON DELETE CASCADE
 		)
 	`
+}
+
+func (db *DB) createPowerOperationsTable() string {
+	return `
+		CREATE TABLE IF NOT EXISTS power_operations (
+			id TEXT PRIMARY KEY,
+			machine_id TEXT NOT NULL,
+			operation TEXT NOT NULL,
+			status TEXT NOT NULL,
+			result TEXT,
+			error TEXT,
+			initiated_by TEXT NOT NULL,
+			created_at TIMESTAMP NOT NULL,
+			completed_at TIMESTAMP,
+			FOREIGN KEY (machine_id) REFERENCES machines(id) ON DELETE CASCADE
+		)
+	`
+}
+
+func (db *DB) createMachineMetricsTable() string {
+	return `
+		CREATE TABLE IF NOT EXISTS machine_metrics (
+			id TEXT PRIMARY KEY,
+			machine_id TEXT NOT NULL,
+			timestamp TIMESTAMP NOT NULL,
+			cpu_usage_percent REAL NOT NULL,
+			memory_used_bytes BIGINT NOT NULL,
+			memory_total_bytes BIGINT NOT NULL,
+			disk_used_bytes BIGINT NOT NULL,
+			disk_total_bytes BIGINT NOT NULL,
+			network_rx_bytes BIGINT NOT NULL,
+			network_tx_bytes BIGINT NOT NULL,
+			load_average_1 REAL NOT NULL,
+			load_average_5 REAL NOT NULL,
+			load_average_15 REAL NOT NULL,
+			temperature REAL,
+			power_state TEXT NOT NULL,
+			uptime BIGINT NOT NULL,
+			FOREIGN KEY (machine_id) REFERENCES machines(id) ON DELETE CASCADE
+		)
+	`
+}
+
+func (db *DB) createImageTestsTable() string {
+	return `
+		CREATE TABLE IF NOT EXISTS image_tests (
+			id TEXT PRIMARY KEY,
+			image_path TEXT NOT NULL,
+			image_type TEXT NOT NULL,
+			test_type TEXT NOT NULL,
+			status TEXT NOT NULL,
+			result TEXT,
+			error TEXT,
+			machine_id TEXT,
+			created_at TIMESTAMP NOT NULL,
+			completed_at TIMESTAMP,
+			FOREIGN KEY (machine_id) REFERENCES machines(id) ON DELETE SET NULL
+		)
+	`
+}
+
+// addBMCInfoColumn adds the bmc_info column to machines table if it doesn't exist
+func (db *DB) addBMCInfoColumn() error {
+	jsonType := "TEXT"
+	if db.driver == "postgres" {
+		jsonType = "JSONB"
+	}
+
+	// For SQLite, check if column exists first
+	if db.driver == "sqlite3" {
+		var count int
+		err := db.QueryRow("SELECT COUNT(*) FROM pragma_table_info('machines') WHERE name='bmc_info'").Scan(&count)
+		if err != nil {
+			return err
+		}
+		if count > 0 {
+			return nil // Column already exists
+		}
+
+		_, err = db.Exec(fmt.Sprintf("ALTER TABLE machines ADD COLUMN bmc_info %s", jsonType))
+		return err
+	}
+
+	// For PostgreSQL
+	_, err := db.Exec(fmt.Sprintf(`
+		ALTER TABLE machines
+		ADD COLUMN IF NOT EXISTS bmc_info %s
+	`, jsonType))
+	return err
 }
