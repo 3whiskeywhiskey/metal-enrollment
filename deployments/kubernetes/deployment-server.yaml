@@ -1,0 +1,80 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: enrollment-server
+  namespace: metal-enrollment
+  labels:
+    app: enrollment-server
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: enrollment-server
+  template:
+    metadata:
+      labels:
+        app: enrollment-server
+    spec:
+      containers:
+      - name: server
+        image: metal-enrollment/server:latest
+        imagePullPolicy: IfNotPresent
+        ports:
+        - containerPort: 8080
+          name: http
+        env:
+        - name: DB_DRIVER
+          valueFrom:
+            configMapKeyRef:
+              name: metal-enrollment-config
+              key: DB_DRIVER
+        - name: DB_DSN
+          value: "/data/metal-enrollment.db"
+        - name: LISTEN_ADDR
+          value: ":8080"
+        - name: BUILDER_URL
+          value: "http://enrollment-builder:8081"
+        volumeMounts:
+        - name: data
+          mountPath: /data
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8080
+          initialDelaySeconds: 10
+          periodSeconds: 30
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 8080
+          initialDelaySeconds: 5
+          periodSeconds: 10
+        resources:
+          requests:
+            memory: "256Mi"
+            cpu: "100m"
+          limits:
+            memory: "512Mi"
+            cpu: "500m"
+      volumes:
+      - name: data
+        persistentVolumeClaim:
+          claimName: metal-enrollment-data
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: enrollment-server
+  namespace: metal-enrollment
+  labels:
+    app: enrollment-server
+spec:
+  type: ClusterIP
+  ports:
+  - port: 8080
+    targetPort: 8080
+    protocol: TCP
+    name: http
+  selector:
+    app: enrollment-server

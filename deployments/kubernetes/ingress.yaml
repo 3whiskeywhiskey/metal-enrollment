@@ -1,0 +1,32 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: metal-enrollment-ingress
+  namespace: metal-enrollment
+  annotations:
+    nginx.ingress.kubernetes.io/rewrite-target: /
+spec:
+  ingressClassName: nginx
+  rules:
+  # Dashboard and API
+  - host: enrollment.metal.local
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: enrollment-server
+            port:
+              number: 8080
+  # iPXE server (should be accessible via IP for PXE boot)
+  - host: pxe.metal.local
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: enrollment-ipxe
+            port:
+              number: 80
