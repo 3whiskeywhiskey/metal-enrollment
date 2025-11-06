@@ -48,7 +48,7 @@ func main() {
 
 	// Combine routers
 	router := mux.NewRouter()
-	router.PathPrefix("/api/").Handler(apiServer.router)
+	router.PathPrefix("/api/").Handler(apiServer.Router)
 	router.PathPrefix("/").Handler(webServer.Router())
 
 	// Start server

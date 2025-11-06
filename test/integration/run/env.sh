@@ -1,0 +1,15 @@
+export DB_FILE="/home/user/metal-enrollment/test/integration/run/db/test.db"
+export IMAGES_DIR="/home/user/metal-enrollment/test/integration/run/images"
+export TFTP_DIR="/home/user/metal-enrollment/test/integration/run/pxe/tftp"
+export HTTP_DIR="/home/user/metal-enrollment/test/integration/run/pxe/http"
+export VM_DIR="/home/user/metal-enrollment/test/integration/run/vm"
+export TEST_NETWORK="127.0.0.0/8"
+export TEST_GATEWAY="127.0.0.1"
+export TEST_DHCP_RANGE="127.0.0.100,127.0.0.200"
+export SERVER_IP="127.0.0.1"
+export ENROLLMENT_PORT=8080
+export BUILDER_PORT=8081
+export IPXE_PORT=8082
+export BASE_URL="http://127.0.0.1:8082"
+export ENROLLMENT_URL="http://127.0.0.1:8080/api/v1/enroll"
+export API_URL="http://127.0.0.1:8080/api/v1"

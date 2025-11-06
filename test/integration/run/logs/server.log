@@ -1,0 +1,6 @@
+2025/11/06 18:40:13 Database initialized successfully (sqlite3)
+2025/11/06 18:40:13 Starting Metal Enrollment server on :8080
+2025/11/06 18:40:17 Enrolled new machine: 00f37e4f-23e1-47e8-8145-43180b8d1c3a (service_tag: TEST1762454417)
+2025/11/06 18:40:17 POST /api/v1/enroll 16.349143ms
+2025/11/06 18:40:17 GET /api/v1/machines 609.789µs
+2025/11/06 18:40:17 PUT /api/v1/machines/00f37e4f-23e1-47e8-8145-43180b8d1c3a 8.495677ms

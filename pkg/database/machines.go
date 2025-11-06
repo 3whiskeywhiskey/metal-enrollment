@@ -62,6 +62,9 @@ func (db *DB) CreateMachine(req models.EnrollmentRequest) (*models.Machine, erro
 func (db *DB) GetMachine(id string) (*models.Machine, error) {
 	machine := &models.Machine{}
 	var hardwareJSON []byte
+	var hostname, description, nixosConfig sql.NullString
+	var lastBuildID sql.NullString
+	var lastBuildTime, lastSeenAt sql.NullTime
 
 	query := `
 		SELECT id, service_tag, mac_address, status, hostname, description,
@@ -84,15 +87,15 @@ func (db *DB) GetMachine(id string) (*models.Machine, error) {
 		&machine.ServiceTag,
 		&machine.MACAddress,
 		&machine.Status,
-		&machine.Hostname,
-		&machine.Description,
+		&hostname,
+		&description,
 		&hardwareJSON,
-		&machine.NixOSConfig,
-		&machine.LastBuildID,
-		&machine.LastBuildTime,
+		&nixosConfig,
+		&lastBuildID,
+		&lastBuildTime,
 		&machine.EnrolledAt,
 		&machine.UpdatedAt,
-		&machine.LastSeenAt,
+		&lastSeenAt,
 	)
 
 	if err == sql.ErrNoRows {
@@ -100,6 +103,27 @@ func (db *DB) GetMachine(id string) (*models.Machine, error) {
 	}
 	if err != nil {
 		return nil, fmt.Errorf("failed to get machine: %w", err)
+	}
+
+	// Convert nullable fields
+	if hostname.Valid {
+		machine.Hostname = hostname.String
+	}
+	if description.Valid {
+		machine.Description = description.String
+	}
+	if nixosConfig.Valid {
+		machine.NixOSConfig = nixosConfig.String
+	}
+	if lastBuildID.Valid {
+		id := lastBuildID.String
+		machine.LastBuildID = &id
+	}
+	if lastBuildTime.Valid {
+		machine.LastBuildTime = &lastBuildTime.Time
+	}
+	if lastSeenAt.Valid {
+		machine.LastSeenAt = &lastSeenAt.Time
 	}
 
 	if err := json.Unmarshal(hardwareJSON, &machine.Hardware); err != nil {
@@ -113,6 +137,9 @@ func (db *DB) GetMachine(id string) (*models.Machine, error) {
 func (db *DB) GetMachineByServiceTag(serviceTag string) (*models.Machine, error) {
 	machine := &models.Machine{}
 	var hardwareJSON []byte
+	var hostname, description, nixosConfig sql.NullString
+	var lastBuildID sql.NullString
+	var lastBuildTime, lastSeenAt sql.NullTime
 
 	query := `
 		SELECT id, service_tag, mac_address, status, hostname, description,
@@ -135,15 +162,15 @@ func (db *DB) GetMachineByServiceTag(serviceTag string) (*models.Machine, error)
 		&machine.ServiceTag,
 		&machine.MACAddress,
 		&machine.Status,
-		&machine.Hostname,
-		&machine.Description,
+		&hostname,
+		&description,
 		&hardwareJSON,
-		&machine.NixOSConfig,
-		&machine.LastBuildID,
-		&machine.LastBuildTime,
+		&nixosConfig,
+		&lastBuildID,
+		&lastBuildTime,
 		&machine.EnrolledAt,
 		&machine.UpdatedAt,
-		&machine.LastSeenAt,
+		&lastSeenAt,
 	)
 
 	if err == sql.ErrNoRows {
@@ -151,6 +178,27 @@ func (db *DB) GetMachineByServiceTag(serviceTag string) (*models.Machine, error)
 	}
 	if err != nil {
 		return nil, fmt.Errorf("failed to get machine: %w", err)
+	}
+
+	// Convert nullable fields
+	if hostname.Valid {
+		machine.Hostname = hostname.String
+	}
+	if description.Valid {
+		machine.Description = description.String
+	}
+	if nixosConfig.Valid {
+		machine.NixOSConfig = nixosConfig.String
+	}
+	if lastBuildID.Valid {
+		id := lastBuildID.String
+		machine.LastBuildID = &id
+	}
+	if lastBuildTime.Valid {
+		machine.LastBuildTime = &lastBuildTime.Time
+	}
+	if lastSeenAt.Valid {
+		machine.LastSeenAt = &lastSeenAt.Time
 	}
 
 	if err := json.Unmarshal(hardwareJSON, &machine.Hardware); err != nil {
@@ -180,24 +228,48 @@ func (db *DB) ListMachines() ([]*models.Machine, error) {
 	for rows.Next() {
 		machine := &models.Machine{}
 		var hardwareJSON []byte
+		var hostname, description, nixosConfig sql.NullString
+		var lastBuildID sql.NullString
+		var lastBuildTime, lastSeenAt sql.NullTime
 
 		err := rows.Scan(
 			&machine.ID,
 			&machine.ServiceTag,
 			&machine.MACAddress,
 			&machine.Status,
-			&machine.Hostname,
-			&machine.Description,
+			&hostname,
+			&description,
 			&hardwareJSON,
-			&machine.NixOSConfig,
-			&machine.LastBuildID,
-			&machine.LastBuildTime,
+			&nixosConfig,
+			&lastBuildID,
+			&lastBuildTime,
 			&machine.EnrolledAt,
 			&machine.UpdatedAt,
-			&machine.LastSeenAt,
+			&lastSeenAt,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("failed to scan machine: %w", err)
+		}
+
+		// Convert nullable fields
+		if hostname.Valid {
+			machine.Hostname = hostname.String
+		}
+		if description.Valid {
+			machine.Description = description.String
+		}
+		if nixosConfig.Valid {
+			machine.NixOSConfig = nixosConfig.String
+		}
+		if lastBuildID.Valid {
+			id := lastBuildID.String
+			machine.LastBuildID = &id
+		}
+		if lastBuildTime.Valid {
+			machine.LastBuildTime = &lastBuildTime.Time
+		}
+		if lastSeenAt.Valid {
+			machine.LastSeenAt = &lastSeenAt.Time
 		}
 
 		if err := json.Unmarshal(hardwareJSON, &machine.Hardware); err != nil {

@@ -2,7 +2,6 @@ package api
 
 import (
 	"encoding/json"
-	"fmt"
 	"log"
 	"net/http"
 	"time"
@@ -15,7 +14,7 @@ import (
 // Server represents the API server
 type Server struct {
 	db     *database.DB
-	router *mux.Router
+	Router *mux.Router
 	config Config
 }
 
@@ -29,7 +28,7 @@ type Config struct {
 func New(db *database.DB, config Config) *Server {
 	s := &Server{
 		db:     db,
-		router: mux.NewRouter(),
+		Router: mux.NewRouter(),
 		config: config,
 	}
 
@@ -40,7 +39,7 @@ func New(db *database.DB, config Config) *Server {
 // setupRoutes configures all API routes
 func (s *Server) setupRoutes() {
 	// API routes
-	api := s.router.PathPrefix("/api/v1").Subrouter()
+	api := s.Router.PathPrefix("/api/v1").Subrouter()
 	api.HandleFunc("/enroll", s.handleEnroll).Methods("POST")
 	api.HandleFunc("/machines", s.handleListMachines).Methods("GET")
 	api.HandleFunc("/machines/{id}", s.handleGetMachine).Methods("GET")
@@ -51,17 +50,17 @@ func (s *Server) setupRoutes() {
 	api.HandleFunc("/builds/{id}", s.handleGetBuild).Methods("GET")
 
 	// Health check
-	s.router.HandleFunc("/health", s.handleHealth).Methods("GET")
+	s.Router.HandleFunc("/health", s.handleHealth).Methods("GET")
 
 	// Middleware
-	s.router.Use(loggingMiddleware)
-	s.router.Use(corsMiddleware)
+	s.Router.Use(loggingMiddleware)
+	s.Router.Use(corsMiddleware)
 }
 
 // Start starts the HTTP server
 func (s *Server) Start() error {
 	log.Printf("Starting API server on %s", s.config.ListenAddr)
-	return http.ListenAndServe(s.config.ListenAddr, s.router)
+	return http.ListenAndServe(s.config.ListenAddr, s.Router)
 }
 
 // handleEnroll handles machine enrollment requests

@@ -63,11 +63,9 @@ func (db *DB) Migrate() error {
 }
 
 func (db *DB) createMachinesTable() string {
-	autoIncrement := "AUTOINCREMENT"
 	jsonType := "TEXT"
 
 	if db.driver == "postgres" {
-		autoIncrement = ""
 		jsonType = "JSONB"
 	}
 
@@ -91,13 +89,7 @@ func (db *DB) createMachinesTable() string {
 }
 
 func (db *DB) createBuildsTable() string {
-	autoIncrement := "AUTOINCREMENT"
-
-	if db.driver == "postgres" {
-		autoIncrement = ""
-	}
-
-	return fmt.Sprintf(`
+	return `
 		CREATE TABLE IF NOT EXISTS builds (
 			id TEXT PRIMARY KEY,
 			machine_id TEXT NOT NULL,
@@ -110,5 +102,5 @@ func (db *DB) createBuildsTable() string {
 			completed_at TIMESTAMP,
 			FOREIGN KEY (machine_id) REFERENCES machines(id)
 		)
-	`, autoIncrement)
+	`
 }
