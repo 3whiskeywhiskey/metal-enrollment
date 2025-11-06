@@ -14,6 +14,12 @@ A comprehensive bare metal machine enrollment and provisioning system for automa
 - **PostgreSQL Support**: Production-ready PostgreSQL database support alongside SQLite
 - **Machine Grouping**: Organize machines into logical groups for easier management
 - **Bulk Operations**: Perform operations on multiple machines simultaneously
+- **IPMI/BMC Integration**: Remote power control and sensor monitoring via IPMI
+- **Machine Metrics**: Collect and monitor CPU, memory, disk, and network metrics
+- **Prometheus Export**: Export metrics in Prometheus format for monitoring
+- **Terraform Provider**: Manage machines using Terraform infrastructure as code
+- **Ansible Integration**: Dynamic inventory for Ansible automation
+- **Image Testing**: Automated testing framework for boot images
 
 ## Architecture
 
@@ -303,6 +309,118 @@ curl -X POST http://localhost:8080/api/v1/bulk \
   }'
 ```
 
+#### Power Control (IPMI/BMC)
+
+##### Configure BMC
+```bash
+curl -X PUT http://localhost:8080/api/v1/machines/<machine-id> \
+  -H "Authorization: Bearer <token>" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "bmc_info": {
+      "ip_address": "10.0.0.100",
+      "username": "admin",
+      "password": "password",
+      "type": "IPMI",
+      "port": 623,
+      "enabled": true
+    }
+  }'
+```
+
+##### Power Control Operations
+```bash
+# Power on
+curl -X POST http://localhost:8080/api/v1/machines/<machine-id>/power \
+  -H "Authorization: Bearer <token>" \
+  -H "Content-Type: application/json" \
+  -d '{"operation": "on"}'
+
+# Power off
+curl -X POST http://localhost:8080/api/v1/machines/<machine-id>/power \
+  -H "Authorization: Bearer <token>" \
+  -H "Content-Type: application/json" \
+  -d '{"operation": "off"}'
+
+# Reset
+curl -X POST http://localhost:8080/api/v1/machines/<machine-id>/power \
+  -H "Authorization: Bearer <token>" \
+  -H "Content-Type: application/json" \
+  -d '{"operation": "reset"}'
+
+# Get power status
+curl -H "Authorization: Bearer <token>" \
+  http://localhost:8080/api/v1/machines/<machine-id>/power/status
+```
+
+##### Get BMC Sensor Readings
+```bash
+curl -H "Authorization: Bearer <token>" \
+  http://localhost:8080/api/v1/machines/<machine-id>/bmc/sensors
+```
+
+#### Machine Metrics
+
+##### Submit Metrics (from machine)
+```bash
+curl -X POST http://localhost:8080/api/v1/machines/<machine-id>/metrics \
+  -H "Content-Type: application/json" \
+  -d '{
+    "cpu_usage_percent": 45.2,
+    "memory_used_bytes": 8589934592,
+    "memory_total_bytes": 17179869184,
+    "disk_used_bytes": 107374182400,
+    "disk_total_bytes": 536870912000,
+    "network_rx_bytes": 1073741824,
+    "network_tx_bytes": 536870912,
+    "load_average_1": 2.5,
+    "load_average_5": 2.1,
+    "load_average_15": 1.8,
+    "temperature": 45.0,
+    "power_state": "on",
+    "uptime": 86400
+  }'
+```
+
+##### Get Latest Metrics
+```bash
+curl -H "Authorization: Bearer <token>" \
+  http://localhost:8080/api/v1/machines/<machine-id>/metrics/latest
+```
+
+##### Get Metrics History
+```bash
+curl -H "Authorization: Bearer <token>" \
+  "http://localhost:8080/api/v1/machines/<machine-id>/metrics/history?since=24h&limit=1000"
+```
+
+##### Prometheus Metrics Export
+```bash
+# Public endpoint - no authentication required
+curl http://localhost:8080/api/v1/metrics
+```
+
+#### Image Testing
+
+##### Create Image Test
+```bash
+curl -X POST http://localhost:8080/api/v1/image-tests \
+  -H "Authorization: Bearer <token>" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "image_path": "/images/custom-image.img",
+    "image_type": "custom",
+    "test_type": "boot",
+    "machine_id": "<machine-id>"
+  }'
+```
+
+##### List Image Tests
+```bash
+curl -H "Authorization: Bearer <token>" \
+  "http://localhost:8080/api/v1/image-tests?image_type=custom&limit=50"
+```
+
 #### User Management (Admin only)
 
 ##### Create User
@@ -323,6 +441,63 @@ curl -X POST http://localhost:8080/api/v1/users \
 curl -H "Authorization: Bearer <token>" \
   http://localhost:8080/api/v1/users
 ```
+
+## Configuration Management Integrations
+
+### Terraform Provider
+
+The Metal Enrollment Terraform provider allows you to manage machines using Infrastructure as Code.
+
+See [integrations/terraform/README.md](integrations/terraform/README.md) for full documentation.
+
+Example usage:
+```hcl
+provider "metal-enrollment" {
+  api_url = "http://localhost:8080"
+  token   = var.metal_enrollment_token
+}
+
+resource "metal-enrollment_machine" "web_server" {
+  service_tag  = "ABC123"
+  hostname     = "web-server-01"
+  description  = "Production web server"
+  nixos_config = file("${path.module}/nixos-config.nix")
+
+  bmc {
+    ip_address = "10.0.0.100"
+    username   = "admin"
+    password   = var.bmc_password
+    enabled    = true
+  }
+}
+```
+
+### Ansible Dynamic Inventory
+
+The Ansible dynamic inventory script automatically discovers machines and groups them for automation.
+
+Setup:
+```bash
+# Make the script executable
+chmod +x integrations/ansible/inventory.py
+
+# Configure environment
+export METAL_ENROLLMENT_URL="http://localhost:8080"
+export METAL_ENROLLMENT_TOKEN="your-jwt-token"  # Optional
+
+# Test the inventory
+./integrations/ansible/inventory.py --list
+
+# Use with ansible
+ansible -i integrations/ansible/inventory.py all -m ping
+
+# Use with ansible-playbook
+ansible-playbook -i integrations/ansible/inventory.py site.yml
+```
+
+Machines are automatically grouped by:
+- **Status**: `status_enrolled`, `status_ready`, `status_provisioned`, etc.
+- **Custom groups**: Any groups created via the API
 
 ## Configuration
 
@@ -460,10 +635,10 @@ export ENABLE_AUTH=false
 - [x] Add authentication and authorization
 - [x] Support for PostgreSQL
 - [x] Machine grouping and bulk operations
-- [ ] Integration with configuration management (Terraform, Ansible)
-- [ ] IPMI/BMC integration for remote power control
-- [ ] Machine metrics and monitoring
-- [ ] Automated testing of boot images
+- [x] Integration with configuration management (Terraform, Ansible)
+- [x] IPMI/BMC integration for remote power control
+- [x] Machine metrics and monitoring
+- [x] Automated testing of boot images
 - [ ] Support for non-Dell hardware (generic service tag detection)
 - [ ] Webhook notifications for machine events
 - [ ] Advanced filtering and search for machines
