@@ -58,6 +58,10 @@ func (db *DB) Migrate() error {
 		db.createPowerOperationsTable(),
 		db.createMachineMetricsTable(),
 		db.createImageTestsTable(),
+		db.createWebhooksTable(),
+		db.createWebhookDeliveriesTable(),
+		db.createMachineTemplatesTable(),
+		db.createMachineEventsTable(),
 	}
 
 	for i, migration := range migrations {
@@ -267,4 +271,89 @@ func (db *DB) addBMCInfoColumn() error {
 		ADD COLUMN IF NOT EXISTS bmc_info %s
 	`, jsonType))
 	return err
+}
+
+func (db *DB) createWebhooksTable() string {
+	jsonType := "TEXT"
+	if db.driver == "postgres" {
+		jsonType = "JSONB"
+	}
+
+	return fmt.Sprintf(`
+		CREATE TABLE IF NOT EXISTS webhooks (
+			id TEXT PRIMARY KEY,
+			name TEXT NOT NULL,
+			url TEXT NOT NULL,
+			events %s NOT NULL,
+			secret TEXT,
+			active BOOLEAN NOT NULL DEFAULT TRUE,
+			headers %s,
+			timeout INTEGER NOT NULL DEFAULT 30,
+			max_retries INTEGER NOT NULL DEFAULT 3,
+			last_success TIMESTAMP,
+			last_failure TIMESTAMP,
+			created_at TIMESTAMP NOT NULL,
+			updated_at TIMESTAMP NOT NULL
+		)
+	`, jsonType, jsonType)
+}
+
+func (db *DB) createWebhookDeliveriesTable() string {
+	return `
+		CREATE TABLE IF NOT EXISTS webhook_deliveries (
+			id TEXT PRIMARY KEY,
+			webhook_id TEXT NOT NULL,
+			event TEXT NOT NULL,
+			payload TEXT NOT NULL,
+			status_code INTEGER NOT NULL,
+			response TEXT,
+			error TEXT,
+			attempts INTEGER NOT NULL DEFAULT 1,
+			success BOOLEAN NOT NULL,
+			created_at TIMESTAMP NOT NULL,
+			completed_at TIMESTAMP,
+			FOREIGN KEY (webhook_id) REFERENCES webhooks(id) ON DELETE CASCADE
+		)
+	`
+}
+
+func (db *DB) createMachineTemplatesTable() string {
+	jsonType := "TEXT"
+	if db.driver == "postgres" {
+		jsonType = "JSONB"
+	}
+
+	return fmt.Sprintf(`
+		CREATE TABLE IF NOT EXISTS machine_templates (
+			id TEXT PRIMARY KEY,
+			name TEXT UNIQUE NOT NULL,
+			description TEXT,
+			nixos_config TEXT NOT NULL,
+			bmc_config %s,
+			tags %s,
+			variables %s,
+			created_at TIMESTAMP NOT NULL,
+			updated_at TIMESTAMP NOT NULL,
+			created_by TEXT NOT NULL
+		)
+	`, jsonType, jsonType, jsonType)
+}
+
+func (db *DB) createMachineEventsTable() string {
+	jsonType := "TEXT"
+	if db.driver == "postgres" {
+		jsonType = "JSONB"
+	}
+
+	return fmt.Sprintf(`
+		CREATE TABLE IF NOT EXISTS machine_events (
+			id TEXT PRIMARY KEY,
+			machine_id TEXT NOT NULL,
+			event TEXT NOT NULL,
+			data %s,
+			created_at TIMESTAMP NOT NULL,
+			created_by TEXT,
+			FOREIGN KEY (machine_id) REFERENCES machines(id) ON DELETE CASCADE
+		)
+	`, jsonType)
 }

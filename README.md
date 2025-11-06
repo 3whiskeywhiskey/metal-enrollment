@@ -20,6 +20,10 @@ A comprehensive bare metal machine enrollment and provisioning system for automa
 - **Terraform Provider**: Manage machines using Terraform infrastructure as code
 - **Ansible Integration**: Dynamic inventory for Ansible automation
 - **Image Testing**: Automated testing framework for boot images
+- **Webhook Notifications**: Real-time event notifications via webhooks for machine lifecycle events
+- **Advanced Filtering**: Search and filter machines by status, hardware specs, hostname, MAC address, and more
+- **Machine Templates**: Pre-configured templates for common machine configurations
+- **Multi-Vendor Support**: Generic service tag detection supporting Dell, HP, Supermicro, and other hardware vendors
 
 ## Architecture
 
@@ -630,6 +634,227 @@ export ENABLE_AUTH=false
 ./server
 ```
 
+## Advanced Features
+
+### Webhook Notifications
+
+The system supports webhook notifications for real-time event monitoring. Webhooks can be configured to receive notifications for various machine lifecycle events.
+
+**Supported Events:**
+- `machine.enrolled` - A new machine has been enrolled
+- `machine.status_changed` - Machine status has changed (e.g., enrolled → configured → ready)
+- `machine.build_started` - A build has been triggered for a machine
+- `machine.template_applied` - A template has been applied to a machine
+- `*` - Wildcard to receive all events
+
+**Create a Webhook:**
+```bash
+curl -X POST http://localhost:8080/api/v1/webhooks \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "Slack Notifications",
+    "url": "https://hooks.slack.com/services/YOUR/WEBHOOK/URL",
+    "events": ["machine.enrolled", "machine.status_changed"],
+    "secret": "optional-secret-for-hmac-signature",
+    "active": true,
+    "timeout": 30,
+    "max_retries": 3,
+    "headers": {"Content-Type": "application/json"}
+  }'
+```
+
+**Webhook Payload:**
+```json
+{
+  "event": "machine.enrolled",
+  "timestamp": "2024-01-15T10:30:00Z",
+  "data": {
+    "machine_id": "abc-123",
+    "service_tag": "DELL-12345",
+    "mac_address": "00:11:22:33:44:55",
+    "status": "enrolled",
+    "manufacturer": "Dell Inc.",
+    "model": "PowerEdge R640"
+  }
+}
+```
+
+**Security:**
+If a `secret` is configured, webhooks include an `X-Webhook-Signature` header with an HMAC-SHA256 signature of the payload.
+
+**List Webhook Deliveries:**
+```bash
+curl http://localhost:8080/api/v1/webhooks/{webhook-id}/deliveries \
+  -H "Authorization: Bearer $TOKEN"
+```
+
+### Machine Templates
+
+Machine templates allow you to define reusable configurations for common machine types. Templates support variable substitution for dynamic values.
+
+**Create a Template:**
+```bash
+curl -X POST http://localhost:8080/api/v1/templates \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "web-server",
+    "description": "Standard web server configuration",
+    "nixos_config": "{ config, pkgs, ... }: {\n  networking.hostName = \"{{hostname}}\";\n  services.nginx.enable = true;\n}",
+    "bmc_config": {
+      "type": "IPMI",
+      "port": 623,
+      "enabled": true
+    },
+    "tags": ["web", "production"],
+    "variables": {
+      "hostname": "web-server"
+    }
+  }'
+```
+
+**Apply Template to Machine:**
+```bash
+curl -X POST http://localhost:8080/api/v1/machines/{machine-id}/template/{template-id} \
+  -H "Authorization: Bearer $TOKEN"
+```
+
+The template will be applied with variable substitution:
+- `{{hostname}}` → Machine's hostname
+- `{{service_tag}}` → Machine's service tag
+- `{{mac_address}}` → Machine's MAC address
+
+**List Templates:**
+```bash
+curl http://localhost:8080/api/v1/templates \
+  -H "Authorization: Bearer $TOKEN"
+```
+
+### Advanced Filtering and Search
+
+The machine list endpoint supports advanced filtering and search capabilities:
+
+**Filter by Status:**
+```bash
+curl "http://localhost:8080/api/v1/machines?status=enrolled" \
+  -H "Authorization: Bearer $TOKEN"
+```
+
+**Search by Hostname:**
+```bash
+curl "http://localhost:8080/api/v1/machines?hostname=web-server" \
+  -H "Authorization: Bearer $TOKEN"
+```
+
+**Filter by Manufacturer:**
+```bash
+curl "http://localhost:8080/api/v1/machines?manufacturer=Dell" \
+  -H "Authorization: Bearer $TOKEN"
+```
+
+**General Search (searches across hostname, service tag, MAC address, description):**
+```bash
+curl "http://localhost:8080/api/v1/machines?search=web-01" \
+  -H "Authorization: Bearer $TOKEN"
+```
+
+**Pagination:**
+```bash
+curl "http://localhost:8080/api/v1/machines?limit=20&offset=40" \
+  -H "Authorization: Bearer $TOKEN"
+```
+
+**Combined Filters:**
+```bash
+curl "http://localhost:8080/api/v1/machines?status=ready&manufacturer=Dell&limit=50" \
+  -H "Authorization: Bearer $TOKEN"
+```
+
+**Available Filter Parameters:**
+- `status` - Filter by machine status
+- `hostname` - Filter by hostname (partial match)
+- `service_tag` - Filter by service tag (partial match)
+- `mac_address` - Filter by MAC address (partial match)
+- `manufacturer` - Filter by hardware manufacturer (partial match)
+- `model` - Filter by hardware model (partial match)
+- `search` - General search across multiple fields
+- `limit` - Number of results to return (pagination)
+- `offset` - Number of results to skip (pagination)
+
+### Multi-Vendor Hardware Support
+
+The system supports generic service tag detection for various hardware vendors:
+
+**Supported Vendors:**
+- **Dell**: Service Tag (e.g., `DELL-ABC123`)
+- **HP/HPE**: Serial Number (e.g., `HP-SN123456`)
+- **Supermicro**: System Serial Number
+- **Generic**: Any system identifier from DMI/SMBIOS
+
+**Service Tag Sources:**
+The system attempts to retrieve the service tag from multiple sources:
+1. Dell Service Tag (`dmidecode -s system-serial-number`)
+2. HP Serial Number
+3. System UUID (fallback)
+4. Custom identifier from hardware info
+
+The enrollment endpoint accepts any string as a service tag, making it compatible with any hardware vendor that provides a unique system identifier.
+
+**Enrollment Example:**
+```bash
+curl -X POST http://localhost:8080/api/v1/enroll \
+  -H "Content-Type: application/json" \
+  -d '{
+    "service_tag": "HP-SN987654",
+    "mac_address": "aa:bb:cc:dd:ee:ff",
+    "hardware": {
+      "manufacturer": "HP",
+      "model": "ProLiant DL380 Gen10",
+      "serial_number": "SN987654",
+      ...
+    }
+  }'
+```
+
+### Machine Events
+
+All machine lifecycle events are logged and can be retrieved via the API:
+
+**Get Machine Events:**
+```bash
+curl http://localhost:8080/api/v1/machines/{machine-id}/events?limit=50 \
+  -H "Authorization: Bearer $TOKEN"
+```
+
+**Example Response:**
+```json
+[
+  {
+    "id": "event-123",
+    "machine_id": "machine-abc",
+    "event": "machine.enrolled",
+    "data": {
+      "service_tag": "DELL-12345",
+      "mac_address": "00:11:22:33:44:55"
+    },
+    "created_at": "2024-01-15T10:30:00Z",
+    "created_by": null
+  },
+  {
+    "id": "event-124",
+    "machine_id": "machine-abc",
+    "event": "machine.status_changed",
+    "data": {
+      "old_status": "enrolled",
+      "new_status": "configured"
+    },
+    "created_at": "2024-01-15T11:00:00Z",
+    "created_by": "user-123"
+  }
+]
+```
+
 ## Roadmap
 
 - [x] Add authentication and authorization
@@ -639,10 +864,10 @@ export ENABLE_AUTH=false
 - [x] IPMI/BMC integration for remote power control
 - [x] Machine metrics and monitoring
 - [x] Automated testing of boot images
-- [ ] Support for non-Dell hardware (generic service tag detection)
-- [ ] Webhook notifications for machine events
-- [ ] Advanced filtering and search for machines
-- [ ] Machine templates for common configurations
+- [x] Support for non-Dell hardware (generic service tag detection)
+- [x] Webhook notifications for machine events
+- [x] Advanced filtering and search for machines
+- [x] Machine templates for common configurations
 
 ## Contributing
 
