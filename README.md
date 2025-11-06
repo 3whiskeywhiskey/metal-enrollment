@@ -10,6 +10,10 @@ A comprehensive bare metal machine enrollment and provisioning system for automa
 - **PXE Boot Integration**: Seamless integration with existing DHCP/TFTP infrastructure
 - **RESTful API**: Full API for programmatic access and automation
 - **Kubernetes Native**: Designed to run in Kubernetes clusters
+- **Authentication & Authorization**: JWT-based authentication with role-based access control (Admin, Operator, Viewer)
+- **PostgreSQL Support**: Production-ready PostgreSQL database support alongside SQLite
+- **Machine Grouping**: Organize machines into logical groups for easier management
+- **Bulk Operations**: Perform operations on multiple machines simultaneously
 
 ## Architecture
 
@@ -171,7 +175,36 @@ http://<ipxe-server>/nixos/machines/<servicetag>.ipxe
 
 ### API Usage
 
-#### Enroll a Machine
+#### Authentication
+
+##### Login
+```bash
+curl -X POST http://localhost:8080/api/v1/login \
+  -H "Content-Type: application/json" \
+  -d '{
+    "username": "admin",
+    "password": "your-password"
+  }'
+```
+
+Response includes a JWT token:
+```json
+{
+  "token": "eyJhbGciOiJIUzI1NiIs...",
+  "expires_at": "2024-01-02T15:04:05Z",
+  "user": { ... }
+}
+```
+
+##### Using Authentication
+Add the token to subsequent requests:
+```bash
+curl -H "Authorization: Bearer <token>" http://localhost:8080/api/v1/machines
+```
+
+#### Machine Management
+
+##### Enroll a Machine (no auth required)
 ```bash
 curl -X POST http://localhost:8080/api/v1/enroll \
   -H "Content-Type: application/json" \
@@ -182,19 +215,22 @@ curl -X POST http://localhost:8080/api/v1/enroll \
   }'
 ```
 
-#### List Machines
+##### List Machines
 ```bash
-curl http://localhost:8080/api/v1/machines
+curl -H "Authorization: Bearer <token>" \
+  http://localhost:8080/api/v1/machines
 ```
 
-#### Get Machine Details
+##### Get Machine Details
 ```bash
-curl http://localhost:8080/api/v1/machines/<machine-id>
+curl -H "Authorization: Bearer <token>" \
+  http://localhost:8080/api/v1/machines/<machine-id>
 ```
 
-#### Update Machine
+##### Update Machine (requires Operator or Admin role)
 ```bash
 curl -X PUT http://localhost:8080/api/v1/machines/<machine-id> \
+  -H "Authorization: Bearer <token>" \
   -H "Content-Type: application/json" \
   -d '{
     "hostname": "server01",
@@ -202,9 +238,90 @@ curl -X PUT http://localhost:8080/api/v1/machines/<machine-id> \
   }'
 ```
 
-#### Trigger Build
+##### Trigger Build (requires Operator or Admin role)
 ```bash
-curl -X POST http://localhost:8080/api/v1/machines/<machine-id>/build
+curl -X POST http://localhost:8080/api/v1/machines/<machine-id>/build \
+  -H "Authorization: Bearer <token>"
+```
+
+#### Group Management
+
+##### Create Group (requires Operator or Admin role)
+```bash
+curl -X POST http://localhost:8080/api/v1/groups \
+  -H "Authorization: Bearer <token>" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "web-servers",
+    "description": "Production web servers",
+    "tags": ["production", "web"]
+  }'
+```
+
+##### List Groups
+```bash
+curl -H "Authorization: Bearer <token>" \
+  http://localhost:8080/api/v1/groups
+```
+
+##### Add Machine to Group (requires Operator or Admin role)
+```bash
+curl -X PUT http://localhost:8080/api/v1/groups/<group-id>/machines/<machine-id> \
+  -H "Authorization: Bearer <token>"
+```
+
+##### Get Group Machines
+```bash
+curl -H "Authorization: Bearer <token>" \
+  http://localhost:8080/api/v1/groups/<group-id>/machines
+```
+
+#### Bulk Operations (requires Operator or Admin role)
+
+##### Bulk Update Machines
+```bash
+curl -X POST http://localhost:8080/api/v1/bulk \
+  -H "Authorization: Bearer <token>" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "group_id": "group-id",
+    "operation": "update",
+    "data": {
+      "description": "Updated via bulk operation"
+    }
+  }'
+```
+
+##### Bulk Build Machines
+```bash
+curl -X POST http://localhost:8080/api/v1/bulk \
+  -H "Authorization: Bearer <token>" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "machine_ids": ["id1", "id2", "id3"],
+    "operation": "build"
+  }'
+```
+
+#### User Management (Admin only)
+
+##### Create User
+```bash
+curl -X POST http://localhost:8080/api/v1/users \
+  -H "Authorization: Bearer <token>" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "username": "operator1",
+    "email": "operator@example.com",
+    "password": "secure-password",
+    "role": "operator"
+  }'
+```
+
+##### List Users
+```bash
+curl -H "Authorization: Bearer <token>" \
+  http://localhost:8080/api/v1/users
 ```
 
 ## Configuration
@@ -216,6 +333,9 @@ curl -X POST http://localhost:8080/api/v1/machines/<machine-id>/build
 - `DB_DSN`: Database connection string
 - `LISTEN_ADDR`: HTTP listen address (default: `:8080`)
 - `BUILDER_URL`: URL of builder service
+- `ENABLE_AUTH`: Enable authentication (default: `true`)
+- `JWT_SECRET`: Secret key for JWT token signing (change in production!)
+- `JWT_EXPIRY`: JWT token expiration duration (default: `24h`)
 
 #### Image Builder
 - `DB_DRIVER`: Database driver
@@ -276,22 +396,78 @@ metal-enrollment/
 
 ## Security Considerations
 
-- Registration image runs as root (needed for hardware detection)
-- Default root password set in registration image - change in production
-- No authentication on API by default - add auth layer for production
-- Builder service requires privileged container for Nix builds
-- SSH keys should be added to machine configurations
+- **Authentication**: JWT-based authentication is enabled by default
+  - Change the default `JWT_SECRET` in production
+  - Default admin credentials (admin/admin) should be changed immediately
+- **Authorization**: Role-based access control with three levels:
+  - **Admin**: Full system access (user management, all operations)
+  - **Operator**: Machine and group management (cannot manage users)
+  - **Viewer**: Read-only access to machines and groups
+- **Database**:
+  - Use PostgreSQL in production with proper credentials
+  - SQLite is suitable for development/testing only
+- **Registration**: Machine enrollment endpoint is public (by design)
+- **Builder Service**: Requires privileged container for Nix builds
+- **SSH Keys**: Should be added to machine configurations for secure access
+
+### Getting Started with Authentication
+
+1. **Start the server with admin creation**:
+   ```bash
+   ./server --create-admin
+   ```
+
+2. **Login to get a token**:
+   ```bash
+   TOKEN=$(curl -s -X POST http://localhost:8080/api/v1/login \
+     -H "Content-Type: application/json" \
+     -d '{"username":"admin","password":"admin"}' | jq -r '.token')
+   ```
+
+3. **Change admin password**:
+   ```bash
+   curl -X PUT http://localhost:8080/api/v1/users/<admin-id> \
+     -H "Authorization: Bearer $TOKEN" \
+     -H "Content-Type: application/json" \
+     -d '{"password":"new-secure-password"}'
+   ```
+
+4. **Create additional users**:
+   ```bash
+   curl -X POST http://localhost:8080/api/v1/users \
+     -H "Authorization: Bearer $TOKEN" \
+     -H "Content-Type: application/json" \
+     -d '{
+       "username":"operator1",
+       "email":"operator@example.com",
+       "password":"secure-password",
+       "role":"operator"
+     }'
+   ```
+
+### Disabling Authentication (Not Recommended)
+
+For development or testing, you can disable authentication:
+```bash
+./server --enable-auth=false
+# or
+export ENABLE_AUTH=false
+./server
+```
 
 ## Roadmap
 
-- [ ] Add authentication and authorization
-- [ ] Support for PostgreSQL
-- [ ] Machine grouping and bulk operations
+- [x] Add authentication and authorization
+- [x] Support for PostgreSQL
+- [x] Machine grouping and bulk operations
 - [ ] Integration with configuration management (Terraform, Ansible)
 - [ ] IPMI/BMC integration for remote power control
 - [ ] Machine metrics and monitoring
 - [ ] Automated testing of boot images
 - [ ] Support for non-Dell hardware (generic service tag detection)
+- [ ] Webhook notifications for machine events
+- [ ] Advanced filtering and search for machines
+- [ ] Machine templates for common configurations
 
 ## Contributing
 

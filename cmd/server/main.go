@@ -5,9 +5,12 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"time"
 
 	"github.com/3whiskeywhiskey/metal-enrollment/pkg/api"
+	"github.com/3whiskeywhiskey/metal-enrollment/pkg/auth"
 	"github.com/3whiskeywhiskey/metal-enrollment/pkg/database"
+	"github.com/3whiskeywhiskey/metal-enrollment/pkg/models"
 	"github.com/3whiskeywhiskey/metal-enrollment/pkg/web"
 	"github.com/gorilla/mux"
 )
@@ -18,6 +21,9 @@ func main() {
 	dbDSN := flag.String("db-dsn", getEnv("DB_DSN", "metal-enrollment.db"), "Database connection string")
 	listenAddr := flag.String("listen", getEnv("LISTEN_ADDR", ":8080"), "HTTP listen address")
 	builderURL := flag.String("builder-url", getEnv("BUILDER_URL", "http://builder:8081"), "Image builder service URL")
+	enableAuth := flag.Bool("enable-auth", getEnv("ENABLE_AUTH", "true") == "true", "Enable authentication")
+	jwtSecret := flag.String("jwt-secret", getEnv("JWT_SECRET", "change-me-in-production"), "JWT signing secret")
+	createAdmin := flag.Bool("create-admin", false, "Create default admin user")
 	flag.Parse()
 
 	// Initialize database
@@ -37,10 +43,20 @@ func main() {
 
 	log.Printf("Database initialized successfully (%s)", *dbDriver)
 
+	// Create default admin user if requested
+	if *createAdmin {
+		if err := createDefaultAdmin(db); err != nil {
+			log.Fatalf("Failed to create admin user: %v", err)
+		}
+	}
+
 	// Create API server
 	apiServer := api.New(db, api.Config{
 		ListenAddr: *listenAddr,
 		BuilderURL: *builderURL,
+		JWTSecret:  *jwtSecret,
+		JWTExpiry:  24 * time.Hour,
+		EnableAuth: *enableAuth,
 	})
 
 	// Create web server
@@ -52,7 +68,7 @@ func main() {
 	router.PathPrefix("/").Handler(webServer.Router())
 
 	// Start server
-	log.Printf("Starting Metal Enrollment server on %s", *listenAddr)
+	log.Printf("Starting Metal Enrollment server on %s (auth: %v)", *listenAddr, *enableAuth)
 	if err := http.ListenAndServe(*listenAddr, router); err != nil {
 		log.Fatalf("Server failed: %v", err)
 	}
@@ -63,4 +79,32 @@ func getEnv(key, defaultValue string) string {
 		return value
 	}
 	return defaultValue
+}
+
+func createDefaultAdmin(db *database.DB) error {
+	// Check if admin already exists
+	admin, err := db.GetUserByUsername("admin")
+	if err != nil {
+		return err
+	}
+
+	if admin != nil {
+		log.Println("Admin user already exists")
+		return nil
+	}
+
+	// Create admin user
+	passwordHash, err := auth.HashPassword("admin")
+	if err != nil {
+		return err
+	}
+
+	admin, err = db.CreateUser("admin", "admin@localhost", passwordHash, models.RoleAdmin)
+	if err != nil {
+		return err
+	}
+
+	log.Printf("Created default admin user (username: admin, password: admin)")
+	log.Printf("IMPORTANT: Change the default password immediately!")
+	return nil
 }

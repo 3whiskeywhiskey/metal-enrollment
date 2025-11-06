@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/3whiskeywhiskey/metal-enrollment/pkg/auth"
 	"github.com/3whiskeywhiskey/metal-enrollment/pkg/database"
 	"github.com/3whiskeywhiskey/metal-enrollment/pkg/models"
 	"github.com/gorilla/mux"
@@ -13,23 +14,28 @@ import (
 
 // Server represents the API server
 type Server struct {
-	db     *database.DB
-	Router *mux.Router
-	config Config
+	db         *database.DB
+	Router     *mux.Router
+	config     Config
+	jwtManager *auth.JWTManager
 }
 
 // Config holds server configuration
 type Config struct {
-	ListenAddr string
-	BuilderURL string
+	ListenAddr    string
+	BuilderURL    string
+	JWTSecret     string
+	JWTExpiry     time.Duration
+	EnableAuth    bool
 }
 
 // New creates a new API server
 func New(db *database.DB, config Config) *Server {
 	s := &Server{
-		db:     db,
-		Router: mux.NewRouter(),
-		config: config,
+		db:         db,
+		Router:     mux.NewRouter(),
+		config:     config,
+		jwtManager: auth.NewJWTManager(config.JWTSecret, config.JWTExpiry),
 	}
 
 	s.setupRoutes()
@@ -40,19 +46,111 @@ func New(db *database.DB, config Config) *Server {
 func (s *Server) setupRoutes() {
 	// API routes
 	api := s.Router.PathPrefix("/api/v1").Subrouter()
+
+	// Public routes (no auth required)
+	api.HandleFunc("/login", s.handleLogin).Methods("POST")
 	api.HandleFunc("/enroll", s.handleEnroll).Methods("POST")
-	api.HandleFunc("/machines", s.handleListMachines).Methods("GET")
-	api.HandleFunc("/machines/{id}", s.handleGetMachine).Methods("GET")
-	api.HandleFunc("/machines/{id}", s.handleUpdateMachine).Methods("PUT")
-	api.HandleFunc("/machines/{id}", s.handleDeleteMachine).Methods("DELETE")
-	api.HandleFunc("/machines/{id}/build", s.handleBuildMachine).Methods("POST")
-	api.HandleFunc("/machines/{id}/builds", s.handleListBuilds).Methods("GET")
-	api.HandleFunc("/builds/{id}", s.handleGetBuild).Methods("GET")
+	api.HandleFunc("/health", s.handleHealth).Methods("GET")
 
-	// Health check
-	s.Router.HandleFunc("/health", s.handleHealth).Methods("GET")
+	if s.config.EnableAuth {
+		// Auth middleware for protected routes
+		authMiddleware := auth.AuthMiddleware(s.jwtManager)
 
-	// Middleware
+		// Authentication routes
+		authAPI := api.PathPrefix("/auth").Subrouter()
+		authAPI.Use(authMiddleware)
+		authAPI.HandleFunc("/refresh", s.handleRefreshToken).Methods("POST")
+		authAPI.HandleFunc("/me", s.handleGetCurrentUser).Methods("GET")
+
+		// User management routes (admin only)
+		usersAPI := api.PathPrefix("/users").Subrouter()
+		usersAPI.Use(authMiddleware)
+		usersAPI.Use(auth.RequireRole(models.RoleAdmin))
+		usersAPI.HandleFunc("", s.handleListUsers).Methods("GET")
+		usersAPI.HandleFunc("", s.handleRegister).Methods("POST")
+		usersAPI.HandleFunc("/{id}", s.handleGetUser).Methods("GET")
+		usersAPI.HandleFunc("/{id}", s.handleUpdateUser).Methods("PUT")
+		usersAPI.HandleFunc("/{id}", s.handleDeleteUser).Methods("DELETE")
+
+		// Machine routes (authenticated)
+		machinesAPI := api.PathPrefix("/machines").Subrouter()
+		machinesAPI.Use(authMiddleware)
+
+		// Viewers can read
+		machinesAPI.HandleFunc("", s.handleListMachines).Methods("GET")
+		machinesAPI.HandleFunc("/{id}", s.handleGetMachine).Methods("GET")
+		machinesAPI.HandleFunc("/{id}/builds", s.handleListBuilds).Methods("GET")
+		machinesAPI.HandleFunc("/{id}/groups", s.handleGetMachineGroups).Methods("GET")
+
+		// Operators and admins can modify
+		operatorRoutes := machinesAPI.PathPrefix("").Subrouter()
+		operatorRoutes.Use(auth.RequireRole(models.RoleOperator, models.RoleAdmin))
+		operatorRoutes.HandleFunc("/{id}", s.handleUpdateMachine).Methods("PUT")
+		operatorRoutes.HandleFunc("/{id}/build", s.handleBuildMachine).Methods("POST")
+
+		// Only admins can delete
+		adminRoutes := machinesAPI.PathPrefix("").Subrouter()
+		adminRoutes.Use(auth.RequireRole(models.RoleAdmin))
+		adminRoutes.HandleFunc("/{id}", s.handleDeleteMachine).Methods("DELETE")
+
+		// Build routes (authenticated)
+		buildsAPI := api.PathPrefix("/builds").Subrouter()
+		buildsAPI.Use(authMiddleware)
+		buildsAPI.HandleFunc("/{id}", s.handleGetBuild).Methods("GET")
+
+		// Group routes (authenticated)
+		groupsAPI := api.PathPrefix("/groups").Subrouter()
+		groupsAPI.Use(authMiddleware)
+
+		// Viewers can read
+		groupsAPI.HandleFunc("", s.handleListGroups).Methods("GET")
+		groupsAPI.HandleFunc("/{id}", s.handleGetGroup).Methods("GET")
+		groupsAPI.HandleFunc("/{id}/machines", s.handleGetGroupMachines).Methods("GET")
+
+		// Operators and admins can modify
+		groupOperatorRoutes := groupsAPI.PathPrefix("").Subrouter()
+		groupOperatorRoutes.Use(auth.RequireRole(models.RoleOperator, models.RoleAdmin))
+		groupOperatorRoutes.HandleFunc("", s.handleCreateGroup).Methods("POST")
+		groupOperatorRoutes.HandleFunc("/{id}", s.handleUpdateGroup).Methods("PUT")
+		groupOperatorRoutes.HandleFunc("/{id}/machines/{machine_id}", s.handleAddMachineToGroup).Methods("PUT")
+		groupOperatorRoutes.HandleFunc("/{id}/machines/{machine_id}", s.handleRemoveMachineFromGroup).Methods("DELETE")
+
+		// Only admins can delete groups
+		groupAdminRoutes := groupsAPI.PathPrefix("").Subrouter()
+		groupAdminRoutes.Use(auth.RequireRole(models.RoleAdmin))
+		groupAdminRoutes.HandleFunc("/{id}", s.handleDeleteGroup).Methods("DELETE")
+
+		// Bulk operations (operators and admins only)
+		bulkAPI := api.PathPrefix("/bulk").Subrouter()
+		bulkAPI.Use(authMiddleware)
+		bulkAPI.Use(auth.RequireRole(models.RoleOperator, models.RoleAdmin))
+		bulkAPI.HandleFunc("", s.handleBulkOperation).Methods("POST")
+	} else {
+		// No auth - all routes are public
+		api.HandleFunc("/machines", s.handleListMachines).Methods("GET")
+		api.HandleFunc("/machines/{id}", s.handleGetMachine).Methods("GET")
+		api.HandleFunc("/machines/{id}", s.handleUpdateMachine).Methods("PUT")
+		api.HandleFunc("/machines/{id}", s.handleDeleteMachine).Methods("DELETE")
+		api.HandleFunc("/machines/{id}/build", s.handleBuildMachine).Methods("POST")
+		api.HandleFunc("/machines/{id}/builds", s.handleListBuilds).Methods("GET")
+		api.HandleFunc("/machines/{id}/groups", s.handleGetMachineGroups).Methods("GET")
+		api.HandleFunc("/builds/{id}", s.handleGetBuild).Methods("GET")
+
+		// Groups
+		api.HandleFunc("/groups", s.handleListGroups).Methods("GET")
+		api.HandleFunc("/groups", s.handleCreateGroup).Methods("POST")
+		api.HandleFunc("/groups/{id}", s.handleGetGroup).Methods("GET")
+		api.HandleFunc("/groups/{id}", s.handleUpdateGroup).Methods("PUT")
+		api.HandleFunc("/groups/{id}", s.handleDeleteGroup).Methods("DELETE")
+		api.HandleFunc("/groups/{id}/machines", s.handleGetGroupMachines).Methods("GET")
+		api.HandleFunc("/groups/{id}/machines/{machine_id}", s.handleAddMachineToGroup).Methods("PUT")
+		api.HandleFunc("/groups/{id}/machines/{machine_id}", s.handleRemoveMachineFromGroup).Methods("DELETE")
+
+		// Bulk operations
+		api.HandleFunc("/bulk", s.handleBulkOperation).Methods("POST")
+	}
+
+	// Global middleware
 	s.Router.Use(loggingMiddleware)
 	s.Router.Use(corsMiddleware)
 }

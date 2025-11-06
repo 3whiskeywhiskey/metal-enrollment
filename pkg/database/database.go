@@ -51,6 +51,10 @@ func (db *DB) Migrate() error {
 	migrations := []string{
 		db.createMachinesTable(),
 		db.createBuildsTable(),
+		db.createUsersTable(),
+		db.createAPIKeysTable(),
+		db.createGroupsTable(),
+		db.createGroupMembershipsTable(),
 	}
 
 	for i, migration := range migrations {
@@ -101,6 +105,69 @@ func (db *DB) createBuildsTable() string {
 			created_at TIMESTAMP NOT NULL,
 			completed_at TIMESTAMP,
 			FOREIGN KEY (machine_id) REFERENCES machines(id)
+		)
+	`
+}
+
+func (db *DB) createUsersTable() string {
+	return `
+		CREATE TABLE IF NOT EXISTS users (
+			id TEXT PRIMARY KEY,
+			username TEXT UNIQUE NOT NULL,
+			email TEXT UNIQUE NOT NULL,
+			password_hash TEXT NOT NULL,
+			role TEXT NOT NULL,
+			active BOOLEAN NOT NULL DEFAULT TRUE,
+			created_at TIMESTAMP NOT NULL,
+			updated_at TIMESTAMP NOT NULL,
+			last_login_at TIMESTAMP
+		)
+	`
+}
+
+func (db *DB) createAPIKeysTable() string {
+	return `
+		CREATE TABLE IF NOT EXISTS api_keys (
+			id TEXT PRIMARY KEY,
+			user_id TEXT NOT NULL,
+			name TEXT NOT NULL,
+			key TEXT UNIQUE NOT NULL,
+			active BOOLEAN NOT NULL DEFAULT TRUE,
+			created_at TIMESTAMP NOT NULL,
+			expires_at TIMESTAMP,
+			last_used_at TIMESTAMP,
+			FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+		)
+	`
+}
+
+func (db *DB) createGroupsTable() string {
+	jsonArrayType := "TEXT"
+	if db.driver == "postgres" {
+		jsonArrayType = "JSONB"
+	}
+
+	return fmt.Sprintf(`
+		CREATE TABLE IF NOT EXISTS groups (
+			id TEXT PRIMARY KEY,
+			name TEXT UNIQUE NOT NULL,
+			description TEXT,
+			tags %s,
+			created_at TIMESTAMP NOT NULL,
+			updated_at TIMESTAMP NOT NULL
+		)
+	`, jsonArrayType)
+}
+
+func (db *DB) createGroupMembershipsTable() string {
+	return `
+		CREATE TABLE IF NOT EXISTS group_memberships (
+			group_id TEXT NOT NULL,
+			machine_id TEXT NOT NULL,
+			added_at TIMESTAMP NOT NULL,
+			PRIMARY KEY (group_id, machine_id),
+			FOREIGN KEY (group_id) REFERENCES groups(id) ON DELETE CASCADE,
+			FOREIGN KEY (machine_id) REFERENCES machines(id) ON DELETE CASCADE
 		)
 	`
 }
